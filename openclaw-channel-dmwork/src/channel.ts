@@ -232,9 +232,11 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
       let lastEventId = 0;
       const seenMessageIds = new Set<string>();
       let pollTimer: NodeJS.Timeout | null = null;
+      let pollInFlight = false;
 
       const pollEvents = async () => {
-        if (stopped) return;
+        if (stopped || pollInFlight) return;
+        pollInFlight = true;
         try {
           const resp = await fetchEvents({
             apiUrl: account.config.apiUrl,
@@ -248,6 +250,14 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
             }
             const msg = event.message;
             if (!msg) continue;
+            // Always ack the event regardless of dedup
+            ackEvent({
+              apiUrl: account.config.apiUrl,
+              botToken: account.config.botToken!,
+              eventId: event.event_id,
+            }).catch((err) => {
+              log?.error?.(`dmwork: ack event ${event.event_id} failed: ${String(err)}`);
+            });
             // Dedup by message_id
             if (seenMessageIds.has(msg.message_id)) continue;
             seenMessageIds.add(msg.message_id);
@@ -277,18 +287,13 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
             }).catch((err) => {
               log?.error?.(`dmwork: poll inbound handler failed: ${String(err)}`);
             });
-            ackEvent({
-              apiUrl: account.config.apiUrl,
-              botToken: account.config.botToken!,
-              eventId: event.event_id,
-            }).catch((err) => {
-              log?.error?.(`dmwork: ack event ${event.event_id} failed: ${String(err)}`);
-            });
           }
         } catch (err) {
           if (!stopped) {
             log?.warn?.(`dmwork: events poll failed: ${String(err)}`);
           }
+        } finally {
+          pollInFlight = false;
         }
       };
 
