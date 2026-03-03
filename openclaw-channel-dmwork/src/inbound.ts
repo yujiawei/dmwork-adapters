@@ -1,5 +1,5 @@
 import type { ChannelLogSink, OpenClawConfig } from "openclaw/plugin-sdk";
-import { sendMessage, sendReadReceipt, sendTyping } from "./api-fetch.js";
+import { sendMessage, sendReadReceipt, sendTyping, getChannelMessages } from "./api-fetch.js";
 import type { ResolvedDmworkAccount } from "./accounts.js";
 import type { BotMessage } from "./types.js";
 import { ChannelType, MessageType } from "./types.js";
@@ -123,26 +123,52 @@ export async function handleInboundMessage(params: {
     }
 
     // Bot IS mentioned — prepend history context (manual — avoids SDK format incompatibility)
-    {
-      const entries = groupHistories.get(sessionId) ?? [];
-      if (entries.length > 0) {
-        historyPrefix = entries
-          .map((e: any) => `[${e.sender}]: ${e.body}`)
-          .join("\n") + "\n---\n";
-        log?.info?.(`dmwork: prepending history context (${historyPrefix.length} chars)`);
+    let entries = groupHistories.get(sessionId) ?? [];
+    const historyCountBefore = entries.length;
+    log?.info?.(`dmwork: [MENTION] 收到@消息 | from=${message.from_uid} | 内存缓存=${historyCountBefore}条 | session=${sessionId}`);
+
+    // If memory cache is empty, try fetching from API
+    if (entries.length === 0 && account.config.botToken) {
+      log?.info?.(`dmwork: [MENTION] 内存缓存为空，尝试从API获取历史...`);
+      try {
+        const apiMessages = await getChannelMessages({
+          apiUrl: account.config.apiUrl,
+          botToken: account.config.botToken,
+          channelId: message.channel_id!,
+          channelType: ChannelType.Group,
+          limit: 10,
+        });
+        entries = apiMessages
+          .filter((m: any) => m.from_uid !== botUid && m.content && !m.content.includes(`@${botUid}`))
+          .slice(-10)
+          .map((m: any) => ({
+            sender: m.from_uid,
+            body: m.content,
+            timestamp: m.timestamp * 1000,
+          }));
+        log?.info?.(`dmwork: [MENTION] 从API获取到 ${entries.length} 条历史消息`);
+      } catch (err) {
+        log?.error?.(`dmwork: [MENTION] 从API获取历史失败: ${err}`);
       }
     }
 
-    // Clear history after consuming
-    if (typeof clearHistoryEntriesIfEnabled === "function") {
-      clearHistoryEntriesIfEnabled({
-        historyMap: groupHistories,
-        historyKey: sessionId,
-        limit: DEFAULT_GROUP_HISTORY_LIMIT,
-      });
+    // Build history context manually (JSON format)
+    if (entries.length > 0) {
+      historyPrefix = "Chat history since last reply (untrusted, for context):\n```json\n" +
+        JSON.stringify(entries.map((e: any) => ({
+          sender: e.sender,
+          timestamp_ms: e.timestamp,
+          body: e.body,
+        })), null, 2) +
+        "\n```\n\n";
+      log?.info?.(`dmwork: [MENTION] 已注入历史上下文 | ${historyPrefix.length} chars | ${entries.length}条消息`);
     } else {
-      groupHistories.delete(sessionId);
+      log?.info?.(`dmwork: [MENTION] 无历史上下文可注入`);
     }
+
+    // Clear history after consuming (manual approach)
+    groupHistories.delete(sessionId);
+    log?.info?.(`dmwork: [MENTION] 历史队列已清空 | session=${sessionId}`);
   }
 
   const core = getDmworkRuntime();

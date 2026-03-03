@@ -146,3 +146,47 @@ export async function fetchBotGroups(params: {
   }
   return resp.json();
 }
+
+/**
+ * 获取频道历史消息（用于注入上下文）
+ */
+export async function getChannelMessages(params: {
+  apiUrl: string;
+  botToken: string;
+  channelId: string;
+  channelType: ChannelType;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<Array<{ from_uid: string; content: string; timestamp: number }>> {
+  try {
+    const url = `${params.apiUrl.replace(/\/+$/, "")}/v1/bot/channel/messages`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.botToken}`,
+      },
+      body: JSON.stringify({
+        channel_id: params.channelId,
+        channel_type: params.channelType,
+        limit: params.limit ?? 20,
+      }),
+      signal: params.signal,
+    });
+
+    if (!response.ok) {
+      console.log(`[dmwork] getChannelMessages failed: ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    return (data.messages ?? data ?? []).map((m: any) => ({
+      from_uid: m.from_uid ?? m.sender_id ?? "unknown",
+      content: m.payload?.content ?? m.content ?? "",
+      timestamp: m.timestamp ?? Date.now(),
+    }));
+  } catch (err) {
+    console.log(`[dmwork] getChannelMessages error: ${err}`);
+    return [];
+  }
+}
