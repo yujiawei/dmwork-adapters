@@ -130,6 +130,7 @@ export async function handleInboundMessage(params: {
     // Take last N entries (sliding window)
     if (entries.length > historyLimit) {
       entries = entries.slice(-historyLimit);
+      groupHistories.set(sessionId, entries);  // Persist trimmed entries
     }
     const historyCountBefore = entries.length;
     log?.info?.(`dmwork: [MENTION] 收到@消息 | from=${message.from_uid} | 缓存=${historyCountBefore}条 | historyLimit=${historyLimit} | session=${sessionId}`);
@@ -155,6 +156,7 @@ export async function handleInboundMessage(params: {
             body: m.content,
             timestamp: m.timestamp * 1000,
           }));
+        groupHistories.set(sessionId, entries);  // Persist API-fetched entries
         log?.info?.(`dmwork: [MENTION] 从API获取到 ${entries.length} 条历史消息`);
       } catch (err) {
         log?.error?.(`dmwork: [MENTION] 从API获取历史失败: ${err}`);
