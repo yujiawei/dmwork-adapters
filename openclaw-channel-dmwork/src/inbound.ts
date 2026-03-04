@@ -138,11 +138,15 @@ export async function handleInboundMessage(params: {
         log?.info?.(`dmwork: [CACHE] Loaded ${members.length} members, memberMap size: ${memberMap.size}`);
         return true;
       } else {
-        log?.warn?.(`dmwork: [CACHE] No members returned for group ${sessionId}`);
+        // Set a short backoff (30s) to prevent retry storms on empty responses
+        groupCacheTimestamps.set(sessionId, now - GROUP_CACHE_EXPIRY_MS + 30000);
+        log?.warn?.(`dmwork: [CACHE] No members returned for group ${sessionId}, backoff 30s`);
         return false;
       }
     } catch (err) {
-      log?.error?.(`dmwork: [CACHE] Failed to fetch group members: ${err}`);
+      // Set a short backoff (30s) to prevent retry storms on errors
+      groupCacheTimestamps.set(sessionId, now - GROUP_CACHE_EXPIRY_MS + 30000);
+      log?.error?.(`dmwork: [CACHE] Failed to fetch group members: ${err}, backoff 30s`);
       return false;
     }
   }
