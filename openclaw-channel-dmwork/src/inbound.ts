@@ -222,6 +222,7 @@ export async function handleInboundMessage(params: {
     // Take last N entries (sliding window)
     if (entries.length > historyLimit) {
       entries = entries.slice(-historyLimit);
+      groupHistories.set(sessionId, entries); // Persist trimmed array to prevent unbounded growth
     }
     const historyCountBefore = entries.length;
     log?.info?.(`dmwork: [MENTION] 收到@消息 | 缓存=${historyCountBefore}条 | historyLimit=${historyLimit}`);
@@ -474,6 +475,11 @@ export async function handleInboundMessage(params: {
           
           // Build final mention UIDs array preserving original order
           replyMentionUids = resolvedUids.filter((uid): uid is string => uid !== null);
+          
+          // Always include the original sender so they get notified of the reply
+          if (message.from_uid && !replyMentionUids.includes(message.from_uid)) {
+            replyMentionUids.unshift(message.from_uid);
+          }
           
           if (replyMentionUids.length > 0) {
             log?.debug?.(`dmwork: [REPLY] final mentionUids count: ${replyMentionUids.length}`);
