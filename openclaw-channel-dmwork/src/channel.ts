@@ -19,6 +19,10 @@ import { ChannelType, MessageType, type BotMessage, type MessagePayload } from "
 type HistoryEntry = { sender: string; body: string; timestamp: number };
 const DEFAULT_GROUP_HISTORY_LIMIT = 20;
 
+// Session expiry configuration
+const SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // Check every hour
+
 // Module-level history storage — survives auto-restarts
 const _historyMaps = new Map<string, Map<string, any[]>>();
 function getOrCreateHistoryMap(accountId: string): Map<string, any[]> {
@@ -63,6 +67,63 @@ function getOrCreateGroupCacheTimestamps(accountId: string): Map<string, number>
     _groupCacheTimestamps.set(accountId, m);
   }
   return m;
+}
+
+// Session last access timestamps: sessionId -> lastAccessAt (ms)
+// Used for session expiry cleanup (fixes #34)
+const _sessionLastAccessMaps = new Map<string, Map<string, number>>();
+function getOrCreateSessionLastAccessMap(accountId: string): Map<string, number> {
+  let m = _sessionLastAccessMaps.get(accountId);
+  if (!m) {
+    m = new Map<string, number>();
+    _sessionLastAccessMaps.set(accountId, m);
+  }
+  return m;
+}
+
+/**
+ * Update session last access timestamp.
+ * Call this whenever a session is accessed (message received).
+ */
+export function touchSession(accountId: string, sessionId: string): void {
+  const lastAccessMap = getOrCreateSessionLastAccessMap(accountId);
+  lastAccessMap.set(sessionId, Date.now());
+}
+
+/**
+ * Clean up expired sessions for an account.
+ * Removes session data that hasn't been accessed for SESSION_EXPIRY_MS.
+ * Returns the number of sessions cleaned up.
+ */
+export function cleanupExpiredSessions(accountId: string, log?: { info?: (msg: string) => void }): number {
+  const now = Date.now();
+  const lastAccessMap = _sessionLastAccessMaps.get(accountId);
+  if (!lastAccessMap) return 0;
+
+  const expiredSessions: string[] = [];
+  for (const [sessionId, lastAccess] of lastAccessMap.entries()) {
+    if (now - lastAccess > SESSION_EXPIRY_MS) {
+      expiredSessions.push(sessionId);
+    }
+  }
+
+  if (expiredSessions.length === 0) return 0;
+
+  const historyMap = _historyMaps.get(accountId);
+  const memberMap = _memberMaps.get(accountId);
+  const uidToNameMap = _uidToNameMaps.get(accountId);
+  const cacheTimestamps = _groupCacheTimestamps.get(accountId);
+
+  for (const sessionId of expiredSessions) {
+    lastAccessMap.delete(sessionId);
+    historyMap?.delete(sessionId);
+    // Note: memberMap and uidToNameMap are keyed by displayName/uid, not sessionId
+    // We clear cacheTimestamps for the session (group)
+    cacheTimestamps?.delete(sessionId);
+  }
+
+  log?.info?.(`dmwork: [CLEANUP] Cleaned up ${expiredSessions.length} expired sessions for account ${accountId}`);
+  return expiredSessions.length;
 }
 
 const meta = {
@@ -241,6 +302,7 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
 
       // 3. Start heartbeat timer
       let heartbeatTimer: NodeJS.Timeout | null = null;
+      let cleanupTimer: NodeJS.Timeout | null = null;
       let stopped = false;
 
       const startHeartbeat = () => {
@@ -254,6 +316,15 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
             log?.error?.(`dmwork: heartbeat failed: ${String(err)}`);
           });
         }, account.config.heartbeatIntervalMs);
+      };
+
+      // Start session cleanup timer (fixes #34 - memory leak)
+      const startCleanupTimer = () => {
+        if (cleanupTimer) { clearInterval(cleanupTimer); cleanupTimer = null; }
+        cleanupTimer = setInterval(() => {
+          if (stopped) return;
+          cleanupExpiredSessions(account.accountId, log);
+        }, SESSION_CLEANUP_INTERVAL_MS);
       };
 
       // 4. Group history map — persists across auto-restarts (module-level)
@@ -288,6 +359,12 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
             `dmwork: recv message from=${msg.from_uid} channel=${msg.channel_id ?? "DM"} type=${msg.channel_type ?? 1}`,
           );
 
+          // Track session activity for cleanup (fixes #34)
+          const sessionId = msg.channel_type === ChannelType.Group && msg.channel_id
+            ? msg.channel_id
+            : msg.from_uid;
+          touchSession(account.accountId, sessionId);
+
           handleInboundMessage({
             account,
             message: msg,
@@ -307,6 +384,7 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
           log?.info?.(`dmwork: WebSocket connected to ${wsUrl}`);
           statusSink({ lastError: null });
           startHeartbeat();
+          startCleanupTimer();
           // WS connected successfully = WuKongIM accepted the token
         },
 
@@ -351,6 +429,7 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
           stopped = true;
           socket.disconnect();
           if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+          if (cleanupTimer) { clearInterval(cleanupTimer); cleanupTimer = null; }
           ctx.setStatus({
             accountId: account.accountId,
             running: false,
