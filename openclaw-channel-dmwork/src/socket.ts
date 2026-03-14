@@ -375,6 +375,8 @@ export class WKSocket extends EventEmitter {
   private restartHeart(): void {
     this.stopHeart();
     this.pingRetryCount = 0;
+    // Send immediate PING on connection to prevent server timeout before first interval fires
+    this.sendRaw(encodePingPacket());
     this.heartTimer = setInterval(() => {
       this.pingRetryCount++;
       if (this.pingRetryCount > this.pingMaxRetry) {
@@ -394,7 +396,7 @@ export class WKSocket extends EventEmitter {
         return;
       }
       this.sendRaw(encodePingPacket());
-    }, 60_000); // 60s heartbeat interval (matches SDK default)
+    }, 30_000); // 30s heartbeat interval (matches WuKongIM server expectation)
   }
 
   private stopHeart(): void {
