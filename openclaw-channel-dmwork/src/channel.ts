@@ -429,6 +429,8 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
           statusSink({ lastError: null });
           startHeartbeat();
           // WS connected successfully = WuKongIM accepted the token
+          // Reset refresh flag so we can refresh again if kicked later (#92)
+          hasRefreshedToken = false;
         },
 
         onDisconnected: () => {
