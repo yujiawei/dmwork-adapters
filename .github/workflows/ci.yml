@@ -26,14 +26,6 @@ jobs:
       - name: 📦 Install
         run: npm ci
 
-      - name: 🔍 Debug
-        run: |
-          node --version
-          npx tsc --version
-          wc -l src/inbound.test.ts
-          cat node_modules/openclaw/package.json | grep version | head -1
-          ls node_modules/openclaw/dist/plugin-sdk/channels/plugins/ | head -10
-
       - name: 🔍 Type Check
         run: npx tsc --noEmit
 
