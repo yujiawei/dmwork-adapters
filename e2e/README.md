@@ -1,85 +1,100 @@
 # DMWork Adapter E2E Tests
 
-End-to-end tests that validate the full user journey: bot registration, OpenClaw deployment, plugin installation, and message handling (text, image, file, voice, group @mention, quote reply, reconnect).
+End-to-end tests for the DMWork adapter (`openclaw-channel-dmwork`).
+Tests run directly against a real DMWork server — no Docker OpenClaw instance required.
+
+## What's Tested
+
+| # | Test Suite | Description |
+|---|-----------|-------------|
+| 01 | Bot Registration | `POST /v1/bot/register` — verify token, get WuKongIM credentials |
+| 02 | Text Messaging | User sends text via WuKongIM → bot receives via WS → bot replies via REST → verify sync |
+| 03 | sendMedia: Image | Upload image via `/v1/file/upload` → bot sends as type=2 → verify delivery |
+| 04 | sendMedia: File | Upload PDF via `/v1/file/upload` → bot sends as type=8 → verify delivery |
+| 05 | Group @bot | Send @mention in group → bot receives via WuKongIM (skipped if no group) |
+| 06 | Reconnect | Force-close WS → verify auto-reconnect → verify message receipt resumes |
 
 ## Prerequisites
 
-- **Node.js** >= 22
-- **Docker** (for OpenClaw container)
-- A **DMWork server** with API access
-- A **bot token** (created via BotFather `/newbot`)
-- A **user token** (to simulate the other end of conversations)
+- DMWork server running (API + WuKongIM)
+- A registered bot with valid token
+- A test user account with valid credentials
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|---|---|---|
-| `E2E_BOT_TOKEN` | Yes | Bot token from BotFather (`bf_...`) |
-| `E2E_DMWORK_API` | Yes | DMWork server URL (e.g. `http://server:8090`) |
-| `E2E_USER_TOKEN` | Yes | User token to simulate sending messages to the bot |
-| `E2E_OPENCLAW_IMAGE` | No | OpenClaw Docker image (default: `openclaw/openclaw:latest`) |
-
-## Quick Start
-
 ```bash
-# Set environment variables
-export E2E_BOT_TOKEN=bf_xxxxx
-export E2E_DMWORK_API=http://your-dmwork-server:8090
-export E2E_USER_TOKEN=your_user_token
+# Required
+export E2E_DMWORK_API=http://localhost:8090    # DMWork API server
+export E2E_BOT_TOKEN=bf_xxx                    # Bot token from BotFather
+export E2E_USER_TOKEN=xxx                      # Test user auth token
+export E2E_USER_UID=xxx                        # Test user UID
+export E2E_WUKONGIM_WS=ws://localhost:5200     # WuKongIM WebSocket endpoint
 
-# Run
-cd e2e
-./run.sh
+# Optional
+export E2E_SMS_CODE=123456                     # SMS verification code (default: 123456)
+export E2E_WUKONGIM_API=http://172.x.x.x:5001 # WuKongIM internal HTTP API (auto-detected from Docker)
 ```
 
-Or run directly with npm:
+### WuKongIM API Auto-Detection
+
+The tests need access to the WuKongIM internal HTTP API (port 5001) for message
+injection. If `E2E_WUKONGIM_API` is not set, the tests will auto-detect it by
+inspecting the `tsdd-wukongim-1` Docker container.
+
+## Running Tests
 
 ```bash
 cd e2e
+
+# Install dependencies
 npm install
+
+# Run all tests
 npm test
+
+# Run with watch mode
+npm run test:watch
+
+# Type-check only
+npm run type-check
 ```
 
-## Test Phases
+## Fixtures
 
-| Phase | File | Description |
-|---|---|---|
-| 1 | `01-bot-setup.ts` | Verify bot token, register with DMWork |
-| 2 | `02-deploy-openclaw.ts` | Start OpenClaw Docker container, health check |
-| 3 | `03-plugin-install.ts` | Install plugin, configure, restart gateway, verify WS |
-| 4a | `04-text-messaging.ts` | Send text to bot, verify response |
-| 4b | `05-send-media.ts` | Upload + send image/file/voice (v0.4.0 sendMedia) |
-| 4c | `06-group-mention.ts` | @mention bot in group, verify response |
-| 4d | `07-quote-reply.ts` | Reply to message, verify context |
-| 4e | `08-reconnect.ts` | Restart gateway, verify auto-reconnect |
-| 5 | `09-cleanup.ts` | Stop and remove Docker container |
+Test fixtures are in `e2e/fixtures/`:
 
-## Project Structure
+- `test-image.png` — Minimal 1×1 PNG (69 bytes)
+- `test-file.pdf` — Minimal PDF document (316 bytes)
+- `test-voice.mp3` — Minimal MP3 file (417 bytes, not used in current tests)
+
+## Architecture
 
 ```
 e2e/
-├── run.sh              # Main entry script
-├── vitest.config.ts    # Test runner config
-├── package.json
-├── tsconfig.json
 ├── lib/
-│   ├── dmwork-client.ts    # DMWork API client (user-side simulation)
-│   ├── openclaw-setup.ts   # Docker instance management
-│   └── assertions.ts       # Test assertion helpers
+│   ├── dmwork-client.ts      # Bot REST API + WuKongIM message injection
+│   ├── wukongim-client.ts    # WuKongIM binary protocol WebSocket client
+│   └── assertions.ts         # Test assertion helpers
 ├── tests/
-│   ├── env.ts              # Environment variable resolution
-│   ├── shared-state.ts     # Cross-phase shared state
-│   ├── 01-bot-setup.ts     # ... through 09-cleanup.ts
-│   └── ...
-└── fixtures/
-    ├── test-image.png      # Minimal valid PNG
-    ├── test-file.pdf       # Minimal valid PDF
-    └── test-voice.mp3      # Minimal valid MP3
+│   ├── env.ts                # Environment variable resolution
+│   └── 01-06*.ts             # Test suites (run sequentially by filename)
+├── fixtures/                 # Test files for upload
+├── vitest.config.ts          # Vitest configuration
+└── package.json
 ```
 
-## Notes
+### Key Design Decisions
 
-- Tests run **sequentially** — each phase depends on the previous one.
-- The OpenClaw container uses a random port in the 19300-19399 range.
-- All Docker resources are cleaned up in Phase 5, even if earlier phases fail.
-- Group mention tests are skipped if the bot isn't in any group.
+- **No OpenClaw dependency**: Tests exercise the DMWork bot API and WuKongIM protocol
+  directly, exactly as the adapter does. This makes tests faster and more focused.
+- **WuKongIM binary protocol**: The `wukongim-client.ts` implements CONNECT, CONNACK,
+  SEND, RECV, RECVACK, PING/PONG with DH key exchange and AES-CBC encryption — the same
+  protocol used by the production adapter.
+- **WuKongIM internal API**: User-side message sending uses the WuKongIM HTTP API
+  (`/message/send`) to bypass friendship restrictions, simulating real user messages
+  at the IM protocol level.
+- **Bot owner as target**: Media and outbound text tests send to the bot's owner
+  (the user who created the bot), since bot→user DMs require a friendship relationship
+  in DMWork.
+- **Sequential execution**: Tests run in filename order because later tests may depend
+  on state created by earlier ones (e.g., bot registration).

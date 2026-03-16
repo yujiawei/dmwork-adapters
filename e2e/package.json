@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "E2E tests for DMWork adapter (openclaw-channel-dmwork)",
+  "description": "E2E tests for DMWork adapter — tests bot API and WuKongIM integration directly",
   "scripts": {
     "build": "tsc",
     "type-check": "tsc --noEmit",
@@ -11,9 +11,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "crypto-js": "^4.2.0",
+    "curve25519-js": "^0.0.4",
+    "md5-typescript": "^1.0.5",
     "ws": "^8.16.0"
   },
   "devDependencies": {
+    "@types/crypto-js": "^4.2.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.10",
     "typescript": "^5.9.3",

@@ -7,9 +7,9 @@ export default defineConfig({
       concurrent: false,
     },
     // Sort test files by name to ensure correct phase order
-    include: ["tests/**/*.ts"],
-    // Generous timeout for Docker + network operations
-    testTimeout: 60_000,
-    hookTimeout: 60_000,
+    include: ["tests/[0-9]*.ts"],
+    // Generous timeout for network operations
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
