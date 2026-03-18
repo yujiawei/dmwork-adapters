@@ -572,6 +572,7 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
           // Skip messages from any other bot in this plugin instance (prevent bot-to-bot loops)
           // But allow group messages through — bot-to-bot @mention in groups is legitimate;
           // mention gating in inbound.ts ensures only @-targeted messages trigger AI.
+          // Also allow event messages (e.g. group_md_updated) from any source.
           if (_knownBotUids.has(msg.from_uid) && msg.channel_type === ChannelType.DM && !isEvent) return;
           // Skip unsupported message types (Location, Card), but allow event messages through
           const supportedTypes = [MessageType.Text, MessageType.Image, MessageType.GIF, MessageType.Voice, MessageType.Video, MessageType.File, MessageType.MultipleForward];
