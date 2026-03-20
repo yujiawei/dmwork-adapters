@@ -31,8 +31,18 @@ type LogSink = {
   debug?: (msg: string) => void;
 };
 
-/** Parse a target string into channelId + channelType */
-export function parseTarget(target: string): {
+/**
+ * Parse a target string into channelId + channelType.
+ *
+ * Explicit prefixes (`group:` / `user:`) always win.
+ * For bare IDs, we check `currentChannelId` (from toolContext) to infer
+ * the channel type — if the bare ID matches the current group channel,
+ * treat it as a group message. Otherwise default to DM.
+ */
+export function parseTarget(
+  target: string,
+  currentChannelId?: string,
+): {
   channelId: string;
   channelType: ChannelType;
 } {
@@ -40,7 +50,50 @@ export function parseTarget(target: string): {
     return { channelId: target.slice(6), channelType: ChannelType.Group };
   if (target.startsWith("user:"))
     return { channelId: target.slice(5), channelType: ChannelType.DM };
+
+  // Bare ID: infer from current session context
+  if (currentChannelId) {
+    // currentChannelId may be "g-<groupNo>" or raw groupNo
+    const normalizedCurrent = currentChannelId.startsWith("g-")
+      ? currentChannelId.slice(2)
+      : currentChannelId;
+    if (target === normalizedCurrent || target === currentChannelId) {
+      return { channelId: target, channelType: ChannelType.Group };
+    }
+  }
+
   return { channelId: target, channelType: ChannelType.DM };
+}
+
+/** Strip common prefixes to get the raw group_no */
+function stripChannelPrefix(raw: string): string {
+  if (raw.startsWith("group:")) return raw.slice(6);
+  if (raw.startsWith("g-")) return raw.slice(2);
+  if (raw.startsWith("dmwork:")) return raw.slice(7);
+  return raw;
+}
+
+/**
+ * Resolve the group ID from args, falling back to currentChannelId.
+ * Accepts: args.groupId, args.target (with group: prefix), or bare currentChannelId.
+ */
+function resolveGroupId(
+  args: Record<string, unknown>,
+  currentChannelId?: string,
+): string | undefined {
+  // Explicit groupId, target, or to param
+  const groupId = (args.groupId ?? args.target ?? args.to) as string | undefined;
+  if (groupId?.trim()) {
+    const raw = groupId.trim();
+    return stripChannelPrefix(raw);
+  }
+
+  // Fallback to currentChannelId from session context
+  if (currentChannelId?.trim()) {
+    return stripChannelPrefix(currentChannelId.trim());
+  }
+
+  return undefined;
 }
 
 export async function handleDmworkMessageAction(params: {
@@ -51,9 +104,10 @@ export async function handleDmworkMessageAction(params: {
   memberMap?: Map<string, string>;
   uidToNameMap?: Map<string, string>;
   groupMdCache?: Map<string, { content: string; version: number }>;
+  currentChannelId?: string;
   log?: LogSink;
 }): Promise<MessageActionResult> {
-  const { action, args, apiUrl, botToken, memberMap, uidToNameMap, groupMdCache, log } =
+  const { action, args, apiUrl, botToken, memberMap, uidToNameMap, groupMdCache, currentChannelId, log } =
     params;
 
   if (!botToken) {
@@ -62,9 +116,9 @@ export async function handleDmworkMessageAction(params: {
 
   switch (action) {
     case "send":
-      return handleSend({ args, apiUrl, botToken, memberMap, log });
+      return handleSend({ args, apiUrl, botToken, memberMap, currentChannelId, log });
     case "read":
-      return handleRead({ args, apiUrl, botToken, uidToNameMap, log });
+      return handleRead({ args, apiUrl, botToken, uidToNameMap, currentChannelId, log });
     case "member-info":
       return handleMemberInfo({ args, apiUrl, botToken, log });
     case "channel-list":
@@ -72,9 +126,11 @@ export async function handleDmworkMessageAction(params: {
     case "channel-info":
       return handleChannelInfo({ args, apiUrl, botToken, log });
     case "group-md-read":
-      return handleGroupMdRead({ args, apiUrl, botToken, groupMdCache, log });
+      console.error(`[dmwork] group-md-read: args=${JSON.stringify(args)}, currentChannelId=${currentChannelId}`);
+      return handleGroupMdRead({ args, apiUrl, botToken, groupMdCache, currentChannelId, log });
     case "group-md-update":
-      return handleGroupMdUpdate({ args, apiUrl, botToken, groupMdCache, log });
+      console.error(`[dmwork] group-md-update: args=${JSON.stringify(args)}, currentChannelId=${currentChannelId}`);
+      return handleGroupMdUpdate({ args, apiUrl, botToken, groupMdCache, currentChannelId, log });
     default:
       return { ok: false, error: `Unknown action: ${action}` };
   }
@@ -89,9 +145,10 @@ async function handleSend(params: {
   apiUrl: string;
   botToken: string;
   memberMap?: Map<string, string>;
+  currentChannelId?: string;
   log?: LogSink;
 }): Promise<MessageActionResult> {
-  const { args, apiUrl, botToken, memberMap, log } = params;
+  const { args, apiUrl, botToken, memberMap, currentChannelId, log } = params;
 
   const target = args.target as string | undefined;
   if (!target) {
@@ -111,7 +168,7 @@ async function handleSend(params: {
     };
   }
 
-  const { channelId, channelType } = parseTarget(target);
+  const { channelId, channelType } = parseTarget(target, currentChannelId);
 
   // Send text message
   if (message) {
@@ -161,9 +218,10 @@ async function handleRead(params: {
   apiUrl: string;
   botToken: string;
   uidToNameMap?: Map<string, string>;
+  currentChannelId?: string;
   log?: LogSink;
 }): Promise<MessageActionResult> {
-  const { args, apiUrl, botToken, uidToNameMap, log } = params;
+  const { args, apiUrl, botToken, uidToNameMap, currentChannelId, log } = params;
 
   const target = args.target as string | undefined;
   if (!target) {
@@ -173,7 +231,7 @@ async function handleRead(params: {
   const rawLimit = Number(args.limit) || 20;
   const limit = Math.min(Math.max(rawLimit, 1), 100);
 
-  const { channelId, channelType } = parseTarget(target);
+  const { channelId, channelType } = parseTarget(target, currentChannelId);
 
   const messages = await getChannelMessages({
     apiUrl,
@@ -302,16 +360,15 @@ async function handleGroupMdRead(params: {
   apiUrl: string;
   botToken: string;
   groupMdCache?: Map<string, { content: string; version: number }>;
+  currentChannelId?: string;
   log?: LogSink;
 }): Promise<MessageActionResult> {
-  const { args, apiUrl, botToken, groupMdCache, log } = params;
+  const { args, apiUrl, botToken, groupMdCache, currentChannelId, log } = params;
 
-  const target = args.target as string | undefined;
-  if (!target) {
-    return { ok: false, error: "Missing required parameter: target" };
+  const channelId = resolveGroupId(args, currentChannelId);
+  if (!channelId) {
+    return { ok: false, error: "Missing required parameter: groupId (or target the current group chat)" };
   }
-
-  const { channelId } = parseTarget(target);
 
   // Try cache first
   const cached = groupMdCache?.get(channelId);
@@ -351,21 +408,20 @@ async function handleGroupMdUpdate(params: {
   apiUrl: string;
   botToken: string;
   groupMdCache?: Map<string, { content: string; version: number }>;
+  currentChannelId?: string;
   log?: LogSink;
 }): Promise<MessageActionResult> {
-  const { args, apiUrl, botToken, groupMdCache, log } = params;
+  const { args, apiUrl, botToken, groupMdCache, currentChannelId, log } = params;
 
-  const target = args.target as string | undefined;
-  if (!target) {
-    return { ok: false, error: "Missing required parameter: target" };
+  const channelId = resolveGroupId(args, currentChannelId);
+  if (!channelId) {
+    return { ok: false, error: "Missing required parameter: groupId (or target the current group chat)" };
   }
 
-  const content = args.content as string | undefined;
+  const content = (args.content ?? args.message ?? args.topic ?? args.desc) as string | undefined;
   if (content == null) {
-    return { ok: false, error: "Missing required parameter: content" };
+    return { ok: false, error: "Missing required parameter: content (or message)" };
   }
-
-  const { channelId } = parseTarget(target);
 
   try {
     const result = await updateGroupMd({
