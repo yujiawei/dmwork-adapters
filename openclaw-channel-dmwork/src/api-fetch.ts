@@ -255,7 +255,8 @@ export async function fetchBotGroups(params: {
     params.log?.error?.(`dmwork: fetchBotGroups failed: ${resp.status}`);
     return [];
   }
-  return await resp.json();
+  const data = await resp.json();
+  return Array.isArray(data) ? data : [];
 }
 
 /**
