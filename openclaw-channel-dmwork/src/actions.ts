@@ -17,6 +17,7 @@ import {
 } from "./api-fetch.js";
 import { uploadAndSendMedia } from "./inbound.js";
 import { parseMentions } from "./mention-utils.js";
+import { getKnownGroupIds } from "./group-md.js";
 
 export interface MessageActionResult {
   ok: boolean;
@@ -42,6 +43,7 @@ type LogSink = {
 export function parseTarget(
   target: string,
   currentChannelId?: string,
+  knownGroupIds?: Set<string>,
 ): {
   channelId: string;
   channelType: ChannelType;
@@ -60,6 +62,11 @@ export function parseTarget(
     if (target === normalizedCurrent || target === currentChannelId) {
       return { channelId: target, channelType: ChannelType.Group };
     }
+  }
+
+  // Check if bare ID is a known group (cross-group messaging)
+  if (knownGroupIds?.has(target)) {
+    return { channelId: target, channelType: ChannelType.Group };
   }
 
   return { channelId: target, channelType: ChannelType.DM };
@@ -166,7 +173,7 @@ async function handleSend(params: {
     };
   }
 
-  const { channelId, channelType } = parseTarget(target, currentChannelId);
+  const { channelId, channelType } = parseTarget(target, currentChannelId, getKnownGroupIds());
 
   // Send text message
   if (message) {
@@ -229,7 +236,7 @@ async function handleRead(params: {
   const rawLimit = Number(args.limit) || 20;
   const limit = Math.min(Math.max(rawLimit, 1), 100);
 
-  const { channelId, channelType } = parseTarget(target, currentChannelId);
+  const { channelId, channelType } = parseTarget(target, currentChannelId, getKnownGroupIds());
 
   const messages = await getChannelMessages({
     apiUrl,

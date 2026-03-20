@@ -11,6 +11,8 @@ import {
   scanForAccountId,
   getGroupMdForPrompt,
   clearGroupMdChecked,
+  getKnownGroupIds,
+  getOrCreateGroupMdCache,
   DMWORK_GROUP_RE,
   _testGetGroupAccountMap,
   _testGetCheckedGroups,
@@ -320,5 +322,58 @@ describe("event recognition (payload.event.type)", () => {
     };
     const eventType = payload.event?.type;
     expect(eventType !== "group_md_updated" && eventType !== "group_md_deleted").toBe(true);
+  });
+});
+
+describe("getKnownGroupIds", () => {
+  it("should return group IDs from _groupAccountMap", () => {
+    registerGroupAccount("grp1", "acct1", "agent1");
+    registerGroupAccount("grp2", "acct1", "agent1");
+    const ids = getKnownGroupIds();
+    expect(ids.has("grp1")).toBe(true);
+    expect(ids.has("grp2")).toBe(true);
+  });
+
+  it("should return group IDs from groupMdCache", () => {
+    const cache = getOrCreateGroupMdCache("acct1");
+    cache.set("grp_cached1", { content: "# Test", version: 1 });
+    cache.set("grp_cached2", { content: "# Test 2", version: 2 });
+    const ids = getKnownGroupIds();
+    expect(ids.has("grp_cached1")).toBe(true);
+    expect(ids.has("grp_cached2")).toBe(true);
+  });
+
+  it("should merge IDs from both _groupAccountMap and groupMdCache", () => {
+    registerGroupAccount("grp_map", "acct1", "agent1");
+    const cache = getOrCreateGroupMdCache("acct2");
+    cache.set("grp_cache", { content: "# Rules", version: 1 });
+    const ids = getKnownGroupIds();
+    expect(ids.has("grp_map")).toBe(true);
+    expect(ids.has("grp_cache")).toBe(true);
+  });
+
+  it("should deduplicate IDs present in both sources", () => {
+    registerGroupAccount("grp_dup", "acct1", "agent1");
+    const cache = getOrCreateGroupMdCache("acct1");
+    cache.set("grp_dup", { content: "# Dup", version: 1 });
+    const ids = getKnownGroupIds();
+    expect(ids.has("grp_dup")).toBe(true);
+    // Set naturally deduplicates, just verify it's present
+    expect([...ids].filter(id => id === "grp_dup")).toHaveLength(1);
+  });
+
+  it("should return empty set when no data exists", () => {
+    const ids = getKnownGroupIds();
+    expect(ids.size).toBe(0);
+  });
+
+  it("should include groups from multiple account caches", () => {
+    const cache1 = getOrCreateGroupMdCache("acct1");
+    cache1.set("grp_a1", { content: "# A1", version: 1 });
+    const cache2 = getOrCreateGroupMdCache("acct2");
+    cache2.set("grp_a2", { content: "# A2", version: 1 });
+    const ids = getKnownGroupIds();
+    expect(ids.has("grp_a1")).toBe(true);
+    expect(ids.has("grp_a2")).toBe(true);
   });
 });

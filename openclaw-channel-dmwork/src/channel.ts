@@ -18,6 +18,7 @@ import { ChannelType, MessageType, type BotMessage, type MessagePayload } from "
 import { parseMentions } from "./mention-utils.js";
 import { handleDmworkMessageAction } from "./actions.js";
 import { createDmworkManagementTools } from "./agent-tools.js";
+import { getOrCreateGroupMdCache } from "./group-md.js";
 import path from "path";
 import os from "os";
 import { mkdir, readFile, writeFile } from "fs/promises";
@@ -71,17 +72,6 @@ function getOrCreateGroupCacheTimestamps(accountId: string): Map<string, number>
   return m;
 }
 
-
-// Module-level GROUP.md cache: accountId -> (groupNo -> { content, version })
-const _groupMdCache = new Map<string, Map<string, { content: string; version: number }>>();
-export function getOrCreateGroupMdCache(accountId: string): Map<string, { content: string; version: number }> {
-  let m = _groupMdCache.get(accountId);
-  if (!m) {
-    m = new Map<string, { content: string; version: number }>();
-    _groupMdCache.set(accountId, m);
-  }
-  return m;
-}
 
 // --- Group → Account mapping: tracks which account each group was received from ---
 // Used by handleAction to resolve the correct account when framework passes wrong accountId
@@ -249,6 +239,7 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
       if (!accountId) return [];
       return [
         `When using the dmwork_management tool, pass accountId: "${accountId}".`,
+        `For cross-group messaging with action=send, use target="group:<groupId>". Use dmwork_management tool (list-groups action) to discover available groups first.`,
       ];
     },
   },

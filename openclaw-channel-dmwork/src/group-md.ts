@@ -41,6 +41,18 @@ const _groupAccountMap = new Map<string, string>();
 /** Set of "accountId/groupNo" that have been checked this session */
 const _checkedGroups = new Set<string>();
 
+/** GROUP.md content cache: accountId → (groupNo → { content, version }) */
+const _groupMdCache = new Map<string, Map<string, { content: string; version: number }>>();
+
+export function getOrCreateGroupMdCache(accountId: string): Map<string, { content: string; version: number }> {
+  let m = _groupMdCache.get(accountId);
+  if (!m) {
+    m = new Map<string, { content: string; version: number }>();
+    _groupMdCache.set(accountId, m);
+  }
+  return m;
+}
+
 // --- Path helpers ---
 
 function workspaceBase(agentId: string): string {
@@ -367,6 +379,27 @@ export function broadcastGroupMdUpdate(params: {
   }
 }
 
+/**
+ * Return the set of all known groupNo values from the in-memory map.
+ * Used by parseTarget to distinguish cross-group targets from DM targets.
+ */
+export function getKnownGroupIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const key of _groupAccountMap.keys()) {
+    const idx = key.indexOf(":");
+    if (idx !== -1) {
+      ids.add(key.slice(idx + 1));
+    }
+  }
+  // Also include groups from groupMdCache (populated at startup via fetchBotGroups)
+  for (const cache of _groupMdCache.values()) {
+    for (const groupNo of cache.keys()) {
+      ids.add(groupNo);
+    }
+  }
+  return ids;
+}
+
 // --- Test helpers (exported for unit tests) ---
 
 export function _testGetGroupAccountMap(): Map<string, string> {
@@ -380,4 +413,5 @@ export function _testGetCheckedGroups(): Set<string> {
 export function _testReset(): void {
   _groupAccountMap.clear();
   _checkedGroups.clear();
+  _groupMdCache.clear();
 }

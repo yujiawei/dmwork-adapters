@@ -701,4 +701,28 @@ describe("parseTarget", () => {
     expect(result.channelId).toBe("some_id");
     expect(result.channelType).toBe(ChannelType.DM);
   });
+
+  it("should treat bare ID as Group when it matches a known group", async () => {
+    const { parseTarget } = await import("./actions.js");
+    const knownGroups = new Set(["grpX", "grpY"]);
+    const result = parseTarget("grpX", undefined, knownGroups);
+    expect(result.channelId).toBe("grpX");
+    expect(result.channelType).toBe(ChannelType.Group);
+  });
+
+  it("should still default to DM when bare ID is not a known group", async () => {
+    const { parseTarget } = await import("./actions.js");
+    const knownGroups = new Set(["grpX", "grpY"]);
+    const result = parseTarget("unknown_uid", undefined, knownGroups);
+    expect(result.channelId).toBe("unknown_uid");
+    expect(result.channelType).toBe(ChannelType.DM);
+  });
+
+  it("should let explicit prefix win over knownGroupIds", async () => {
+    const { parseTarget } = await import("./actions.js");
+    const knownGroups = new Set(["grpX"]);
+    const result = parseTarget("user:grpX", undefined, knownGroups);
+    expect(result.channelId).toBe("grpX");
+    expect(result.channelType).toBe(ChannelType.DM);
+  });
 });
