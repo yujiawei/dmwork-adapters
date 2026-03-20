@@ -6,7 +6,7 @@ import { ChannelType, MessageType } from "./types.js";
 import { getDmworkRuntime } from "./runtime.js";
 import { DEFAULT_HISTORY_PROMPT_TEMPLATE } from "./config-schema.js";
 import { extractMentionMatches } from "./mention-utils.js";
-import { registerGroupAccount, ensureGroupMd, handleGroupMdEvent } from "./group-md.js";
+import { registerGroupAccount, ensureGroupMd, handleGroupMdEvent, broadcastGroupMdUpdate } from "./group-md.js";
 
 // Defensive imports — these may not exist in older OpenClaw versions
 // History context managed manually for cross-SDK compatibility
@@ -482,24 +482,53 @@ export async function handleInboundMessage(params: {
 
   await ensureSdkLoaded();
 
-  // Detect GROUP.md update notification — refresh cache silently, do NOT pass to LLM
-  const eventType = (message.payload as any)?.event?.type;
-  if (eventType === "group_md_updated" && message.channel_id && groupMdCache) {
-    log?.info?.(`dmwork: GROUP.md updated notification for group ${message.channel_id}`);
-    try {
-      const md = await getGroupMd({
-        apiUrl: account.config.apiUrl,
-        botToken: account.config.botToken ?? "",
-        groupNo: message.channel_id,
-        log,
-      });
-      if (md.content) {
-        groupMdCache.set(message.channel_id, { content: md.content, version: md.version });
-        log?.info?.(`dmwork: GROUP.md cache updated for ${message.channel_id} (v${md.version})`);
+  // Detect GROUP.md update/delete notification — refresh both memory + disk cache, do NOT pass to LLM
+  const earlyEventType = (message.payload as any)?.event?.type;
+  if ((earlyEventType === "group_md_updated" || earlyEventType === "group_md_deleted") && message.channel_id) {
+    log?.info?.(`dmwork: GROUP.md ${earlyEventType} notification for group ${message.channel_id}`);
+
+    // Update memory cache
+    if (earlyEventType === "group_md_updated" && groupMdCache) {
+      try {
+        const md = await getGroupMd({
+          apiUrl: account.config.apiUrl,
+          botToken: account.config.botToken ?? "",
+          groupNo: message.channel_id,
+          log,
+        });
+        if (md.content) {
+          groupMdCache.set(message.channel_id, { content: md.content, version: md.version });
+          log?.info?.(`dmwork: GROUP.md memory cache updated for ${message.channel_id} (v${md.version})`);
+        }
+      } catch (err) {
+        log?.error?.(`dmwork: failed to refresh GROUP.md memory cache: ${String(err)}`);
       }
-    } catch (err) {
-      log?.error?.(`dmwork: failed to refresh GROUP.md: ${String(err)}`);
+    } else if (earlyEventType === "group_md_deleted" && groupMdCache) {
+      groupMdCache.delete(message.channel_id);
     }
+
+    // Update disk cache (for before_prompt_build hook)
+    // Use broadcastGroupMdUpdate which scans all agent workspaces — avoids needing agentId
+    if (earlyEventType === "group_md_updated" && groupMdCache) {
+      const cached = groupMdCache.get(message.channel_id);
+      if (cached) {
+        broadcastGroupMdUpdate({
+          accountId: account.accountId,
+          groupNo: message.channel_id,
+          content: cached.content,
+          version: cached.version,
+        });
+      }
+    } else if (earlyEventType === "group_md_deleted") {
+      // Delete disk cache for all agents
+      broadcastGroupMdUpdate({
+        accountId: account.accountId,
+        groupNo: message.channel_id,
+        content: "",
+        version: 0,
+      });
+    }
+
     return;
   }
 
@@ -525,7 +554,7 @@ export async function handleInboundMessage(params: {
 
     // Check for structured event messages (group_md_updated / group_md_deleted)
     const eventType = message.payload?.event?.type;
-    console.error(`[dmwork-event] isGroup=${isGroup} channel_id=${message.channel_id} eventType=${eventType ?? 'none'} from=${message.from_uid}`);
+    console.error(`[dmwork-event] isGroup=${isGroup} channel_id=${message.channel_id} eventType=${eventType ?? 'none'} from=${message.from_uid} payload_keys=${Object.keys(message.payload ?? {}).join(',')} payload_type=${message.payload?.type}`);
     if (eventType === "group_md_updated" || eventType === "group_md_deleted") {
       // Resolve agentId for disk path
       const core = getDmworkRuntime();

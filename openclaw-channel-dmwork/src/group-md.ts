@@ -66,8 +66,10 @@ function groupMetaPath(agentId: string, accountId: string, groupNo: string): str
  * Called by inbound.ts on every group message.
  */
 export function registerGroupAccount(groupNo: string, accountId: string, agentId?: string): void {
-  const key = agentId ? `${agentId}:${groupNo}` : groupNo;
-  _groupAccountMap.set(key, accountId);
+  if (agentId) {
+    _groupAccountMap.set(`${agentId}:${groupNo}`, accountId);
+  }
+  // Do NOT register bare groupNo key — it causes cross-agent contamination on multi-bot nodes
 }
 
 /**
@@ -108,7 +110,8 @@ export function scanForAccountId(agentId: string, groupNo: string): string | nul
  * Resolve accountId for a group — memory first, then disk scan.
  */
 function resolveAccountId(agentId: string, groupNo: string): string | null {
-  return _groupAccountMap.get(`${agentId}:${groupNo}`) ?? _groupAccountMap.get(groupNo) ?? scanForAccountId(agentId, groupNo);
+  // Only use agent-specific key — bare groupNo key may belong to a different agent on the same node
+  return _groupAccountMap.get(`${agentId}:${groupNo}`) ?? scanForAccountId(agentId, groupNo);
 }
 
 /**
@@ -296,9 +299,11 @@ export function getGroupMdForPrompt(ctx: {
   const groupNo = match[1];
 
   const accountId = resolveAccountId(agentId, groupNo);
+  console.error(`[group-md] getGroupMdForPrompt: agentId=${agentId} groupNo=${groupNo} accountId=${accountId ?? 'null'} mapSize=${_groupAccountMap.size} mapKeys=[${Array.from(_groupAccountMap.keys()).join(',')}]`);
   if (!accountId) return null;
 
   const content = readGroupMdFromDisk(agentId, accountId, groupNo);
+  console.error(`[group-md] readGroupMdFromDisk: agentId=${agentId} accountId=${accountId} content=${content ? content.substring(0, 30) : 'null'}`);
   return content;
 }
 
@@ -307,6 +312,61 @@ export function getGroupMdForPrompt(ctx: {
  */
 export function clearGroupMdChecked(accountId: string, groupNo: string): void {
   _checkedGroups.delete(`${accountId}/${groupNo}`);
+}
+
+/**
+ * Update GROUP.md disk cache for all known agents that have this group registered.
+ * Called by agent-tools.ts after a successful API update, since the tool context
+ * doesn't have access to agentId.
+ */
+export function broadcastGroupMdUpdate(params: {
+  accountId: string;
+  groupNo: string;
+  content: string;
+  version: number;
+}): void {
+  const { accountId, groupNo, content, version } = params;
+  const meta: GroupMdMeta = {
+    version,
+    updated_at: new Date().toISOString(),
+    updated_by: "tool",
+    fetched_at: new Date().toISOString(),
+    account_id: accountId,
+  };
+
+  // Find all agentIds that have this group registered
+  const updatedAgents: string[] = [];
+  for (const [key, acctId] of _groupAccountMap.entries()) {
+    if (acctId !== accountId) continue;
+    const parts = key.split(":");
+    if (parts.length === 2 && parts[1] === groupNo) {
+      const agentId = parts[0];
+      writeGroupMdToDisk({ agentId, accountId, groupNo, content, meta });
+      _checkedGroups.add(`${accountId}/${groupNo}`);
+      updatedAgents.push(agentId);
+    }
+  }
+
+  // Also scan workspace dirs if no map entries found (first-time scenario)
+  if (updatedAgents.length === 0) {
+    const base = join(homedir(), ".openclaw", "workspace");
+    try {
+      const agents = readdirSync(base, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+      for (const agentId of agents) {
+        const existing = readGroupMdFromDisk(agentId, accountId, groupNo);
+        if (existing !== null) {
+          writeGroupMdToDisk({ agentId, accountId, groupNo, content, meta });
+          updatedAgents.push(agentId);
+        }
+      }
+    } catch { /* workspace dir may not exist */ }
+  }
+
+  if (updatedAgents.length > 0) {
+    console.error(`[dmwork] broadcastGroupMdUpdate: updated disk cache for agents=[${updatedAgents.join(",")}] group=${groupNo} v${version}`);
+  }
 }
 
 // --- Test helpers (exported for unit tests) ---

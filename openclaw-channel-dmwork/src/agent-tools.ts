@@ -21,6 +21,7 @@ import {
   getGroupMd,
   updateGroupMd,
 } from "./api-fetch.js";
+import { broadcastGroupMdUpdate } from "./group-md.js";
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
@@ -154,6 +155,7 @@ export function createDmworkManagementTools(params: {
                 botToken,
                 groupId,
                 content,
+                accountId,
               });
 
             default:
@@ -228,6 +230,7 @@ async function handleGroupMdUpdate(params: {
   botToken: string;
   groupId: string;
   content: string;
+  accountId: string;
 }): Promise<ToolResult> {
   const result = await updateGroupMd({
     apiUrl: params.apiUrl,
@@ -235,6 +238,15 @@ async function handleGroupMdUpdate(params: {
     groupNo: params.groupId,
     content: params.content,
   });
+
+  // Update disk cache for all agents that have this group
+  broadcastGroupMdUpdate({
+    accountId: params.accountId,
+    groupNo: params.groupId,
+    content: params.content,
+    version: result.version,
+  });
+
   return makeSuccess({ updated: true, version: result.version });
 }
 
