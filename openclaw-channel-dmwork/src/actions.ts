@@ -126,10 +126,8 @@ export async function handleDmworkMessageAction(params: {
     case "channel-info":
       return handleChannelInfo({ args, apiUrl, botToken, log });
     case "group-md-read":
-      console.error(`[dmwork] group-md-read: args=${JSON.stringify(args)}, currentChannelId=${currentChannelId}`);
       return handleGroupMdRead({ args, apiUrl, botToken, groupMdCache, currentChannelId, log });
     case "group-md-update":
-      console.error(`[dmwork] group-md-update: args=${JSON.stringify(args)}, currentChannelId=${currentChannelId}`);
       return handleGroupMdUpdate({ args, apiUrl, botToken, groupMdCache, currentChannelId, log });
     default:
       return { ok: false, error: `Unknown action: ${action}` };

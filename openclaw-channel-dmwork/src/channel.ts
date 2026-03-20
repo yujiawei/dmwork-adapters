@@ -591,7 +591,6 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
           // Allow structured event messages (e.g. group_md_updated) even from self/bots
           const isEvent = !!(msg.payload as any)?.event?.type;
           if (msg.payload?.type === 1 && (msg.payload as any)?.event) {
-            console.error(`[dmwork-ws] EVENT msg: from=${msg.from_uid} event=${JSON.stringify((msg.payload as any).event)} channel=${msg.channel_id}`);
           }
           // Skip self messages (but not events — bot needs to know about its own GROUP.md updates)
           if (msg.from_uid === credentials.robot_id && !isEvent) return;

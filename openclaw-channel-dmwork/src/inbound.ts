@@ -598,36 +598,8 @@ export async function handleInboundMessage(params: {
       registerGroupAccount(message.channel_id, account.accountId);
     }
 
-    // Check for structured event messages (group_md_updated / group_md_deleted)
-    const eventType = message.payload?.event?.type;
-    console.error(`[dmwork-event] isGroup=${isGroup} channel_id=${message.channel_id} eventType=${eventType ?? 'none'} from=${message.from_uid} payload_keys=${Object.keys(message.payload ?? {}).join(',')} payload_type=${message.payload?.type}`);
-    if (eventType === "group_md_updated" || eventType === "group_md_deleted") {
-      // Resolve agentId for disk path
-      const core = getDmworkRuntime();
-      const cfg = core.config.loadConfig() as OpenClawConfig;
-      try {
-        const route = core.channel.routing.resolveAgentRoute({
-          config: cfg,
-          provider: "dmwork",
-          accountId: account.accountId,
-          channelType: "group",
-          peerId: message.channel_id,
-        });
-        await handleGroupMdEvent({
-          agentId: route.agentId,
-          accountId: account.accountId,
-          groupNo: message.channel_id,
-          eventType,
-          apiUrl: account.config.apiUrl,
-          botToken: account.config.botToken ?? "",
-          log,
-        });
-      } catch (err) {
-        log?.warn?.(`dmwork: [GROUP.md] event handling failed: ${String(err)}`);
-      }
-      // Don't forward event messages to AI
-      return;
-    }
+    // Note: group_md_updated/deleted events are handled by the early handler above (line ~530)
+    // and never reach here because early handler returns.
   }
 
   // Parse space_id from channel_id (format: s{spaceId}_{peerId})

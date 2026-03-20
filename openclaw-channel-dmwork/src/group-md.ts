@@ -299,11 +299,9 @@ export function getGroupMdForPrompt(ctx: {
   const groupNo = match[1];
 
   const accountId = resolveAccountId(agentId, groupNo);
-  console.error(`[group-md] getGroupMdForPrompt: agentId=${agentId} groupNo=${groupNo} accountId=${accountId ?? 'null'} mapSize=${_groupAccountMap.size} mapKeys=[${Array.from(_groupAccountMap.keys()).join(',')}]`);
   if (!accountId) return null;
 
   const content = readGroupMdFromDisk(agentId, accountId, groupNo);
-  console.error(`[group-md] readGroupMdFromDisk: agentId=${agentId} accountId=${accountId} content=${content ? content.substring(0, 30) : 'null'}`);
   return content;
 }
 
