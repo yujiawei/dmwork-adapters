@@ -201,7 +201,7 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
       } catch {
         return [];
       }
-      return ["send", "read"] as any;
+      return ["send", "read"] as any; // TODO: remove when SDK types support this
     },
     extractToolSend: ({ args }: { args: Record<string, unknown> }) => {
       const target = args.target as string | undefined;
@@ -242,7 +242,7 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
         log: ctx.log,
       });
     },
-  } as any,
+  } as any, // TODO: remove when SDK types support this
   agentTools: (params: { cfg?: any }) => createDmworkManagementTools(params),
   agentPrompt: {
     messageToolHints: ({ cfg, accountId }: { cfg: any; accountId?: string | null }) => {
@@ -589,8 +589,8 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
 
         onMessage: (msg: BotMessage) => {
           // Allow structured event messages (e.g. group_md_updated) even from self/bots
-          const isEvent = !!(msg.payload as any)?.event?.type;
-          if (msg.payload?.type === 1 && (msg.payload as any)?.event) {
+          const isEvent = !!(msg.payload as any)?.event?.type; // TODO: remove when SDK types support this
+          if (msg.payload?.type === 1 && (msg.payload as any)?.event) { // TODO: remove when SDK types support this
           }
           // Skip self messages (but not events — bot needs to know about its own GROUP.md updates)
           if (msg.from_uid === credentials.robot_id && !isEvent) return;
