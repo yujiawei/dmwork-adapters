@@ -1,5 +1,5 @@
 import type { ChannelLogSink, OpenClawConfig } from "openclaw/plugin-sdk";
-import { sendMessage, sendReadReceipt, sendTyping, getChannelMessages, getGroupMembers, getGroupMd, postJson } from "./api-fetch.js";
+import { sendMessage, sendReadReceipt, sendTyping, getChannelMessages, getGroupMembers, getGroupMd, postJson, uploadFile, sendMediaMessage, inferContentType } from "./api-fetch.js";
 import type { ResolvedDmworkAccount } from "./accounts.js";
 import type { BotMessage } from "./types.js";
 import { ChannelType, MessageType } from "./types.js";
@@ -56,6 +56,43 @@ function resolveOutboundMediaUrls(payload: { mediaUrl?: string; mediaUrls?: stri
 }
 
 /** Extract filename from a URL path */
+/**
+ * Parse image dimensions from buffer (PNG/JPEG/GIF/WebP).
+ * Lightweight — reads only the header bytes, no external dependencies.
+ */
+function parseImageDimensions(buf: Buffer, mime: string): { width: number; height: number } | null {
+  try {
+    if (mime === "image/png" && buf.length > 24) {
+      // PNG: width at offset 16 (4 bytes BE), height at offset 20 (4 bytes BE)
+      return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    }
+    if ((mime === "image/jpeg" || mime === "image/jpg") && buf.length > 2) {
+      // JPEG: scan for SOF0/SOF2 marker (0xFF 0xC0 or 0xFF 0xC2)
+      let offset = 2;
+      while (offset < buf.length - 8) {
+        if (buf[offset] !== 0xFF) break;
+        const marker = buf[offset + 1];
+        if (marker === 0xC0 || marker === 0xC2) {
+          return { width: buf.readUInt16BE(offset + 7), height: buf.readUInt16BE(offset + 5) };
+        }
+        const len = buf.readUInt16BE(offset + 2);
+        offset += 2 + len;
+      }
+    }
+    if (mime === "image/gif" && buf.length > 10) {
+      // GIF: width at offset 6 (2 bytes LE), height at offset 8 (2 bytes LE)
+      return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+    }
+    if (mime === "image/webp" && buf.length > 30) {
+      // WebP VP8: width at offset 26, height at offset 28 (both 2 bytes LE)
+      if (buf.toString("ascii", 12, 16) === "VP8 " && buf.length > 29) {
+        return { width: buf.readUInt16LE(26) & 0x3FFF, height: buf.readUInt16LE(28) & 0x3FFF };
+      }
+    }
+  } catch { /* ignore parse errors */ }
+  return null;
+}
+
 function extractFilename(url: string): string {
   try {
     const pathname = new URL(url).pathname;
@@ -77,53 +114,62 @@ export async function uploadAndSendMedia(params: {
 }): Promise<void> {
   const { mediaUrl, apiUrl, botToken, channelId, channelType, log } = params;
 
-  // Fetch the media content
-  const resp = await fetch(mediaUrl);
-  if (!resp.ok) throw new Error(`Failed to fetch media: ${resp.status}`);
-  const buffer = Buffer.from(await resp.arrayBuffer());
-  const contentType = resp.headers.get("content-type") || "application/octet-stream";
-  const filename = extractFilename(mediaUrl);
+  // Handle local file path or remote URL
+  let buffer: Buffer;
+  let contentType: string;
+  let filename: string;
 
-  // Upload to MinIO via multipart
-  const boundary = `----FormBoundary${Date.now()}`;
-  const bodyParts: Buffer[] = [];
-  const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`;
-  const footer = `\r\n--${boundary}--\r\n`;
-  bodyParts.push(Buffer.from(header, "utf-8"));
-  bodyParts.push(buffer);
-  bodyParts.push(Buffer.from(footer, "utf-8"));
-  const body = Buffer.concat(bodyParts);
-
-  const uploadUrl = `${apiUrl.replace(/\/+$/, "")}/v1/bot/upload?type=chat`;
-  const uploadResp = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${botToken}`,
-      "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    },
-    body,
-  });
-  if (!uploadResp.ok) {
-    const text = await uploadResp.text().catch(() => "");
-    throw new Error(`Upload failed (${uploadResp.status}): ${text}`);
+  if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
+    const resp = await fetch(mediaUrl);
+    if (!resp.ok) throw new Error(`Failed to fetch media: ${resp.status}`);
+    buffer = Buffer.from(await resp.arrayBuffer());
+    contentType = resp.headers.get("content-type") || "application/octet-stream";
+    filename = extractFilename(mediaUrl);
+  } else {
+    // Local file path
+    const { readFileSync } = await import("node:fs");
+    const { basename } = await import("node:path");
+    buffer = readFileSync(mediaUrl);
+    filename = basename(mediaUrl);
+    contentType = inferContentType(filename);
   }
-  const uploadResult = await uploadResp.json() as { path?: string; url?: string };
-  const fileUrl = uploadResult.path ?? uploadResult.url ?? "";
+
+  // Upload via /v1/bot/file/upload
+  const uploaded = await uploadFile({
+    apiUrl,
+    botToken,
+    fileBuffer: buffer,
+    filename,
+    contentType,
+  });
 
   // Determine message type from MIME
-  const msgType = contentType.startsWith("image/") ? MessageType.Image : MessageType.File;
+  const isImage = contentType.startsWith("image/");
+  const msgType = isImage ? MessageType.Image : MessageType.File;
 
-  log?.info?.(`dmwork: uploaded media as ${msgType === MessageType.Image ? "image" : "file"}: ${filename}`);
+  // For images, try to read dimensions from the buffer
+  let width: number | undefined;
+  let height: number | undefined;
+  if (isImage) {
+    const dims = parseImageDimensions(buffer, contentType);
+    width = dims?.width;
+    height = dims?.height;
+  }
 
-  // Send via sendMessage payload
-  await postJson(apiUrl, botToken, "/v1/bot/sendMessage", {
-    channel_id: channelId,
-    channel_type: channelType,
-    payload: {
-      type: msgType,
-      url: fileUrl,
-      name: filename,
-    },
+  log?.info?.(`dmwork: uploaded media as ${isImage ? "image" : "file"}: ${filename}${width ? ` (${width}x${height})` : ""}`);
+
+  // Send via sendMessage
+  await sendMediaMessage({
+    apiUrl,
+    botToken,
+    channelId,
+    channelType,
+    type: msgType,
+    url: uploaded.url,
+    name: isImage ? undefined : filename,
+    size: isImage ? undefined : buffer.length,
+    width,
+    height,
   });
 }
 

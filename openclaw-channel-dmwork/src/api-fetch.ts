@@ -94,6 +94,8 @@ export async function sendMediaMessage(params: {
   url: string;
   name?: string;
   size?: number;
+  width?: number;
+  height?: number;
   mentionUids?: string[];
   signal?: AbortSignal;
 }): Promise<void> {
@@ -101,8 +103,16 @@ export async function sendMediaMessage(params: {
     type: params.type,
     url: params.url,
   };
-  if (params.name) payload.name = params.name;
-  if (params.size != null) payload.size = params.size;
+
+  // Image (type=2) needs width/height; File (type=8) needs name/size
+  if (params.type === MessageType.Image) {
+    if (params.width) payload.width = params.width;
+    if (params.height) payload.height = params.height;
+  } else {
+    if (params.name) payload.name = params.name;
+    if (params.size != null) payload.size = params.size;
+  }
+
   if (params.mentionUids && params.mentionUids.length > 0) {
     payload.mention = { uids: params.mentionUids };
   }

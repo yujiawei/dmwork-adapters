@@ -53,10 +53,10 @@ export function parseTarget(
 
   // Bare ID: infer from current session context
   if (currentChannelId) {
-    // currentChannelId may be "g-<groupNo>" or raw groupNo
-    const normalizedCurrent = currentChannelId.startsWith("g-")
-      ? currentChannelId.slice(2)
-      : currentChannelId;
+    // currentChannelId may have prefixes: "dmwork:", "g-", or raw groupNo
+    let normalizedCurrent = currentChannelId;
+    if (normalizedCurrent.startsWith("dmwork:")) normalizedCurrent = normalizedCurrent.slice(7);
+    if (normalizedCurrent.startsWith("g-")) normalizedCurrent = normalizedCurrent.slice(2);
     if (target === normalizedCurrent || target === currentChannelId) {
       return { channelId: target, channelType: ChannelType.Group };
     }

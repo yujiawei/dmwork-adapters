@@ -83,6 +83,18 @@ export function getOrCreateGroupMdCache(accountId: string): Map<string, { conten
   return m;
 }
 
+// --- Group → Account mapping: tracks which account each group was received from ---
+// Used by handleAction to resolve the correct account when framework passes wrong accountId
+const _groupToAccount = new Map<string, string>(); // groupNo → accountId
+
+export function registerGroupToAccount(groupNo: string, accountId: string): void {
+  _groupToAccount.set(groupNo, accountId);
+}
+
+export function resolveAccountForGroup(groupNo: string): string | undefined {
+  return _groupToAccount.get(groupNo);
+}
+
 // --- Cache cleanup: evict groups inactive for >4 hours ---
 const CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const CACHE_CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
@@ -196,7 +208,18 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
       return target ? { target } : {};
     },
     handleAction: async (ctx: any) => {
-      const accountId = ctx.accountId ?? DEFAULT_ACCOUNT_ID;
+      // Resolve correct accountId: framework may pass wrong one when agent has multiple accounts.
+      // Use currentChannelId to look up which account actually owns the group.
+      let accountId = ctx.accountId ?? DEFAULT_ACCOUNT_ID;
+      const currentChannelId = ctx.toolContext?.currentChannelId;
+      if (currentChannelId) {
+        const rawGroupNo = currentChannelId.replace(/^dmwork:/, '');
+        const correctAccountId = resolveAccountForGroup(rawGroupNo);
+        if (correctAccountId && correctAccountId !== accountId) {
+          ctx.log?.info?.(`dmwork: handleAction accountId corrected: ${accountId} → ${correctAccountId} (group=${rawGroupNo})`);
+          accountId = correctAccountId;
+        }
+      }
       const account = resolveDmworkAccount({
         cfg: ctx.cfg,
         accountId,
@@ -567,6 +590,9 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
         onMessage: (msg: BotMessage) => {
           // Allow structured event messages (e.g. group_md_updated) even from self/bots
           const isEvent = !!(msg.payload as any)?.event?.type;
+          if (msg.payload?.type === 1 && (msg.payload as any)?.event) {
+            console.error(`[dmwork-ws] EVENT msg: from=${msg.from_uid} event=${JSON.stringify((msg.payload as any).event)} channel=${msg.channel_id}`);
+          }
           // Skip self messages (but not events — bot needs to know about its own GROUP.md updates)
           if (msg.from_uid === credentials.robot_id && !isEvent) return;
           // Skip messages from any other bot in this plugin instance (prevent bot-to-bot loops)
@@ -598,7 +624,12 @@ export const dmworkPlugin: ChannelPlugin<ResolvedDmworkAccount> = {
           );
 
           // Track cache activity for cleanup
-          if (msg.channel_id) touchCache(account.accountId, msg.channel_id);
+          if (msg.channel_id) {
+            touchCache(account.accountId, msg.channel_id);
+            if (msg.channel_type === ChannelType.Group) {
+              registerGroupToAccount(msg.channel_id, account.accountId);
+            }
+          }
 
           handleInboundMessage({
             account,
